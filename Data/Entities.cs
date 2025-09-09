@@ -17,8 +17,9 @@ public class ReceiptEntity
     [MaxLength(32)]
     public string Msisdn { get; set; } = default!;
 
-    [Column(TypeName = "decimal(18,2)")]
-    public decimal Amount { get; set; }
+ [Precision(18, 2)]
+public decimal Amount { get; set; }
+
 
     [MaxLength(8)]
     public string Currency { get; set; } = "USD";
