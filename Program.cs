@@ -75,6 +75,26 @@ public class Program
         });
 
         var app = builder.Build();
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        // If the request is to our JSON APIs, return JSON on errors
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        var path = context.Request.Path.Value ?? "";
+        if (path.StartsWith("/tcrm/") || path.StartsWith("/api/") || path.StartsWith("/s/"))
+        {
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsJsonAsync(new { error = "Unexpected server error" });
+        }
+        else
+        {
+            // Non-API paths fall back to a lightweight HTML error
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync("<h3>Unexpected server error</h3>");
+        }
+    });
+});
 
         app.UseDefaultFiles();
         app.UseStaticFiles();
