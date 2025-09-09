@@ -1,7 +1,7 @@
 using System.Data;
 using EReceiptAllInOne.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
+using Npgsql;
 
 namespace EReceiptAllInOne.Services;
 
@@ -17,28 +17,39 @@ public class SqlRateLimitService : IRateLimitService
 
     public async Task<bool> HitAsync(string key, int limit, TimeSpan window)
     {
+        // Compute the window end (ceil to window)
         var now = DateTimeOffset.UtcNow;
-        // ceil to window end
         var ticks = window.Ticks;
-        var winEndUtc = new DateTimeOffset(new DateTime(((now.UtcDateTime.Ticks + ticks - 1) / ticks) * ticks, DateTimeKind.Utc));
+        var winEndUtc = new DateTimeOffset(
+            new DateTime(((now.UtcDateTime.Ticks + ticks - 1) / ticks) * ticks, DateTimeKind.Utc)
+        );
 
-        var sql = @"
+        // Postgres upsert that returns the new count
+        const string sql = @"
 INSERT INTO ""RateLimits"" (""Key"", ""WindowEndUtc"", ""Count"")
-VALUES (@p0, @p1, 1)
+VALUES (@k, @w, 1)
 ON CONFLICT (""Key"", ""WindowEndUtc"")
 DO UPDATE SET ""Count"" = ""RateLimits"".""Count"" + 1
 RETURNING ""Count"";";
 
-        await using var conn = _db.Database.GetDbConnection();
-        if (conn.State != ConnectionState.Open) await conn.OpenAsync();
+        // IMPORTANT: open our own Npgsql connection instead of using EF's connection instance
+        var cs = _db.Database.GetConnectionString();
+        if (string.IsNullOrWhiteSpace(cs))
+        {
+            // Fallback to current connection object's string if needed
+            cs = _db.Database.GetDbConnection().ConnectionString;
+        }
 
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        var p0 = cmd.CreateParameter(); p0.ParameterName = "@p0"; p0.Value = key; cmd.Parameters.Add(p0);
-        var p1 = cmd.CreateParameter(); p1.ParameterName = "@p1"; p1.Value = winEndUtc; cmd.Parameters.Add(p1);
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync();
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.Add(new NpgsqlParameter("@k", NpgsqlTypes.NpgsqlDbType.Text) { Value = key });
+        cmd.Parameters.Add(new NpgsqlParameter("@w", NpgsqlTypes.NpgsqlDbType.TimestampTz) { Value = winEndUtc.UtcDateTime });
 
         var result = await cmd.ExecuteScalarAsync();
         var count = Convert.ToInt32(result);
+
         return count <= limit;
     }
 }
