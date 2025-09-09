@@ -21,9 +21,11 @@ public class Program
         var demoMode   = builder.Configuration.GetValue<bool>("Demo", true);
         var shortOpts  = builder.Configuration.GetSection("Shortener").Get<ShortenerOptions>() ?? new ShortenerOptions();
         var jwtOpts    = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
+        
         var storage    = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new StorageOptions();
         var rlOptions  = builder.Configuration.GetSection("RateLimit").Get<RateLimitOptions>() ?? new RateLimitOptions();
 
+        builder.Services.AddSingleton(jwtOpts);   // <-- add this
         // DB provider
         builder.Services.AddDbContext<AppDbContext>(opt =>
         {
