@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: ereceipt-app
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ASPNETCORE_URLS
+        value: http://0.0.0.0:${PORT}
+      - key: Demo
+        value: true
+      - key: Storage__Mode
+        value: Sql
+      - key: Storage__SqlProvider
+        value: Postgres
+      - key: Storage__ConnectionStrings__Postgres
+        value: REPLACE_WITH_RENDER_PG_CONNSTRING
+      - key: Shortener__ShortBaseUrl
+        value: https://REPLACE_AFTER_DEPLOY
+      - key: Shortener__ViewBaseUrl
+        value: https://REPLACE_AFTER_DEPLOY/view.html
+      - key: Jwt__Issuer
+        value: ereceipt
+      - key: Jwt__Audience
+        value: ereceipt-viewer
+      - key: Jwt__ExpMinutes
+        value: "10"
+      - key: Jwt__SkewSeconds
+        value: "120"
+      - key: Jwt__ActiveKid
+        value: k2
+      - key: Jwt__Keys__0__Kid
+        value: k1
+      - key: Jwt__Keys__0__Secret
+        value: CHANGE_ME_TO_LONG_RANDOM_1______________________________________
+      - key: Jwt__Keys__1__Kid
+        value: k2
+      - key: Jwt__Keys__1__Secret
+        value: CHANGE_ME_TO_LONG_RANDOM_2______________________________________
+      - key: RateLimit__Otp__PerIpPerMinute
+        value: "5"
+      - key: RateLimit__Otp__PerJtiPerMinute
+        value: "3"
+      - key: RateLimit__Shorten__PerIpPerMinute
+        value: "30"
+      - key: RateLimit__Shorten__PerKeyPerHour
+        value: "120"
