@@ -10,7 +10,7 @@ namespace EReceiptAllInOne.Services;
 public class JwtKeyRing
 {
     private readonly Dictionary<string, SymmetricSecurityKey> _keys = new(StringComparer.Ordinal);
-    private string _activeKid;
+    private string _activeKid = "legacy";
 
     public JwtKeyRing(JwtOptions opts)
     {
@@ -20,14 +20,25 @@ public class JwtKeyRing
             {
                 if (string.IsNullOrWhiteSpace(k.Kid) || string.IsNullOrWhiteSpace(k.Secret) || k.Secret.Length < 32)
                     continue;
-                _keys[k.Kid] = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(k.Secret));
+
+                // Set KeyId so the JWT header includes "kid"
+                var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(k.Secret))
+                {
+                    KeyId = k.Kid
+                };
+                _keys[k.Kid] = key;
             }
+
             _activeKid = string.IsNullOrWhiteSpace(opts.ActiveKid) ? opts.Keys[^1].Kid : opts.ActiveKid!;
         }
         else if (!string.IsNullOrWhiteSpace(opts.Secret))
         {
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(opts.Secret))
+            {
+                KeyId = "legacy"
+            };
+            _keys["legacy"] = key;
             _activeKid = "legacy";
-            _keys[_activeKid] = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(opts.Secret));
         }
         else
         {
@@ -38,12 +49,12 @@ public class JwtKeyRing
     public string ActiveKid => _activeKid;
 
     public SigningCredentials GetActiveCredentials()
-        => new SigningCredentials(_keys[_activeKid], SecurityAlgorithms.HmacSha256) { Kid = _activeKid };
+        => new SigningCredentials(_keys[_activeKid], SecurityAlgorithms.HmacSha256);
 
     public IEnumerable<SecurityKey> AllKeys() => _keys.Values;
 
     public SecurityKey? GetKeyByKid(string? kid)
-        => (kid != null && _keys.TryGetValue(kid, out var key)) ? key : null;
+        => kid != null && _keys.TryGetValue(kid, out var key) ? key : null;
 
     public bool TrySetActiveKid(string kid)
     {
@@ -70,6 +81,7 @@ public class JwtService
         var now = DateTime.UtcNow;
         var exp = now.AddMinutes(_opts.ExpMinutes <= 0 ? 10 : _opts.ExpMinutes);
         var creds = _ring.GetActiveCredentials();
+
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Jti, jti),
@@ -80,6 +92,7 @@ public class JwtService
             new Claim("cur", rec.Currency),
             new Claim(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
         };
+
         var token = new JwtSecurityToken(
             issuer: _opts.Issuer,
             audience: _opts.Audience,
@@ -88,6 +101,11 @@ public class JwtService
             expires: exp,
             signingCredentials: creds
         );
+
+        // (Optional) explicitly ensure header has kid; usually set via key.KeyId already
+        if (!string.IsNullOrEmpty(creds.Key.KeyId))
+            token.Header["kid"] = creds.Key.KeyId;
+
         return _handler.WriteToken(token);
     }
 
@@ -102,7 +120,7 @@ public class JwtService
             ValidateIssuerSigningKey = true,
             IssuerSigningKeyResolver = (t, st, kid, p) =>
             {
-                if (kid != null)
+                if (!string.IsNullOrEmpty(kid))
                 {
                     var key = _ring.GetKeyByKid(kid);
                     if (key != null) return new[] { key };
@@ -112,6 +130,7 @@ public class JwtService
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(Math.Abs(_opts.SkewSeconds))
         };
+
         try
         {
             var principal = new JwtSecurityTokenHandler().ValidateToken(token, parms, out _);
