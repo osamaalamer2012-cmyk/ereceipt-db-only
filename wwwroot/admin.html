@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>e-Receipt Admin</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { max-width: 1100px; margin: 16px auto; }
+    header h1 { margin-bottom: 8px; }
+    .row { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+    .row > * { margin: 6px 0; }
+    input[type="password"], input[type="number"], input[type="text"] { padding:6px; min-width:260px; }
+    button { padding:8px 12px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap:16px; margin-top:12px; }
+    .card table { width:100%; border-collapse: collapse; font-size:14px; }
+    .card th, .card td { padding:6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+    .muted { color:#666; font-size: 12px; }
+    .ok { color: #066a0a; }
+    .err { color: #b00020; }
+    code { background: #f6f8fa; padding: 1px 4px; border-radius: 4px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    details summary { cursor: pointer; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>e-Receipt Admin</h1>
+  <p class="muted">Read-only viewers for Receipts, ShortLinks, OTPs (masked), and RateLimits. Requires a valid <code>X-Admin-Key</code>.</p>
+</header>
+
+<section class="card">
+  <h2>Connection</h2>
+  <div class="row">
+    <div>
+      <label for="adminKey"><b>Admin key</b></label><br/>
+      <input id="adminKey" type="password" placeholder="paste X-Admin-Key" />
+      <label style="margin-left:8px"><input id="remember" type="checkbox"> remember (session only)</label>
+    </div>
+    <div>
+      <label for="baseUrl"><b>Base URL</b></label><br/>
+      <input id="baseUrl" type="text" placeholder="https://your-app.onrender.com" />
+    </div>
+    <div>
+      <label for="take"><b>Rows</b></label><br/>
+      <input id="take" type="number" value="50" min="1" max="500" />
+    </div>
+    <div>
+      <button id="btnSave">Save</button>
+    </div>
+  </div>
+  <div id="status" class="muted" style="margin-top:6px;"></div>
+</section>
+
+<section class="grid">
+  <section class="card">
+    <h3>Receipts</h3>
+    <div class="muted">Most recent first</div>
+    <div style="margin:8px 0"><button id="btnReceipts">Load</button></div>
+    <div id="receipts"></div>
+  </section>
+
+  <section class="card">
+    <h3>Short Links</h3>
+    <div class="muted">Usage, TTL and long URL (with token)</div>
+    <div style="margin:8px 0"><button id="btnShort">Load</button></div>
+    <div id="shortlinks"></div>
+  </section>
+
+  <section class="card">
+    <h3>OTP Codes</h3>
+    <div class="muted">Masked codes; latest expiries first</div>
+    <div style="margin:8px 0"><button id="btnOtp">Load</button></div>
+    <div id="otps"></div>
+  </section>
+
+  <section class="card">
+    <h3>Rate Limits</h3>
+    <div class="muted">Windowed counters (key, window end, count)</div>
+    <div style="margin:8px 0"><button id="btnRl">Load</button></div>
+    <div id="ratelimits"></div>
+  </section>
+</section>
+
+<section class="card" style="margin-top:16px">
+  <h3>Load Everything</h3>
+  <button id="btnAll">Load All</button>
+</section>
+
+<script>
+  // ---------- helpers ----------
+  const $ = (id) => document.getElementById(id);
+  function show(id, html){ $(id).innerHTML = html; }
+  function text(id, s){ $(id).textContent = s; }
+  function safeParseJson(t){ try{ return t ? JSON.parse(t) : null; }catch{ return null; } }
+
+  function getCfg(){
+    const key = $('adminKey').value.trim();
+    let base = $('baseUrl').value.trim() || (location.origin);
+    if (base.endsWith('/')) base = base.slice(0,-1);
+    let take = parseInt($('take').value || '50', 10);
+    if (isNaN(take) || take < 1) take = 50;
+    if (take > 500) take = 500;
+    return { key, base, take };
+  }
+
+  async function api(path){
+    const { key, base } = getCfg();
+    if(!key){ throw new Error('Admin key is required'); }
+    const res = await fetch(base + path, { headers: { 'X-Admin-Key': key }});
+    const txt = await res.text();
+    const json = safeParseJson(txt);
+    if(!res.ok){ const msg = (json && (json.error||json.message)) || txt || ('HTTP '+res.status); throw new Error(msg); }
+    return json;
+  }
+
+  function renderTable(containerId, rows, columns){
+    if(!Array.isArray(rows) || rows.length === 0){
+      show(containerId, '<div class="muted">No rows.</div>'); return;
+    }
+    if(!columns){ columns = Object.keys(rows[0]); }
+    const escape = (s) => (s==null? '' : String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
+    const head = '<tr>' + columns.map(c=>`<th>${escape(c)}</th>`).join('') + '</tr>';
+    const body = rows.map(r => {
+      return '<tr>' + columns.map(c => `<td class="mono">${escape(r[c])}</td>`).join('') + '</tr>';
+    }).join('');
+    show(containerId, `<table><thead>${head}</thead><tbody>${body}</tbody></table>`);
+  }
+
+  // ---------- wiring ----------
+  $('btnSave').onclick = () => {
+    const { key, base } = getCfg();
+    if(!key){ text('status', '❌ Admin key is required'); return; }
+    if($('remember').checked){
+      sessionStorage.setItem('adminKey', key);
+      sessionStorage.setItem('baseUrl', base);
+      sessionStorage.setItem('take', $('take').value);
+      text('status', '✓ Saved in session');
+    }else{
+      sessionStorage.removeItem('adminKey');
+      sessionStorage.removeItem('baseUrl');
+      sessionStorage.removeItem('take');
+      text('status', '✓ Not remembered (session cleared)');
+    }
+  };
+
+  // restore from session if present
+  (function init(){
+    const k = sessionStorage.getItem('adminKey');
+    const b = sessionStorage.getItem('baseUrl');
+    const t = sessionStorage.getItem('take');
+    if(k) $('adminKey').value = k;
+    if(b) $('baseUrl').value = b;
+    if(t) $('take').value = t;
+    if(k) $('remember').checked = true;
+  })();
+
+  $('btnReceipts').onclick = async () => {
+    try{
+      const { take } = getCfg();
+      const rows = await api(`/admin/db/receipts?take=${take}`);
+      renderTable('receipts', rows, ['receiptId','txnId','msisdn','amount','currency','maxUses','uses','expiresAt','createdAt']);
+    }catch(e){ show('receipts', `<div class="err">❌ ${e.message}</div>`); }
+  };
+
+  $('btnShort').onclick = async () => {
+    try{
+      const { take } = getCfg();
+      const rows = await api(`/admin/db/shortlinks?take=${take}`);
+      // Render longUrl in a collapsible block to avoid huge rows
+      if(Array.isArray(rows)){
+        const mapped = rows.map(r => ({
+          code: r.code,
+          usage: r.usage,
+          usageMax: r.usageMax,
+          expiresAt: r.expiresAt,
+          createdAt: r.createdAt,
+          longUrl: r.longUrl
+        }));
+        // custom render: table + details for each longUrl
+        const columns = ['code','usage','usageMax','expiresAt','createdAt','longUrl'];
+        const escape = s => (s==null? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'));
+        const head = '<tr>' + columns.map(c=>`<th>${escape(c)}</th>`).join('') + '</tr>';
+        const body = mapped.map(r => {
+          const urlCell = `<details><summary>show</summary><div class="mono">${escape(r.longUrl)}</div></details>`;
+          return `<tr>
+            <td class="mono">${escape(r.code)}</td>
+            <td class="mono">${escape(r.usage)}</td>
+            <td class="mono">${escape(r.usageMax)}</td>
+            <td class="mono">${escape(r.expiresAt)}</td>
+            <td class="mono">${escape(r.createdAt)}</td>
+            <td>${urlCell}</td>
+          </tr>`;
+        }).join('');
+        show('shortlinks', `<table><thead>${head}</thead><tbody>${body}</tbody></table>`);
+      } else {
+        renderTable('shortlinks', rows);
+      }
+    }catch(e){ show('shortlinks', `<div class="err">❌ ${e.message}</div>`); }
+  };
+
+  $('btnOtp').onclick = async () => {
+    try{
+      const { take } = getCfg();
+      const rows = await api(`/admin/db/otpcodes?take=${take}`);
+      renderTable('otps', rows, ['token','code','expiresAtUtc']);
+    }catch(e){ show('otps', `<div class="err">❌ ${e.message}</div>`); }
+  };
+
+  $('btnRl').onclick = async () => {
+    try{
+      const { take } = getCfg();
+      const rows = await api(`/admin/db/ratelimits?take=${take}`);
+      renderTable('ratelimits', rows, ['key','windowEndUtc','count']);
+    }catch(e){ show('ratelimits', `<div class="err">❌ ${e.message}</div>`); }
+  };
+
+  $('btnAll').onclick = async () => {
+    $('btnReceipts').click(); $('btnShort').click(); $('btnOtp').click(); $('btnRl').click();
+  };
+</script>
+</body>
+</html>
