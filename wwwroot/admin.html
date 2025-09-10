@@ -12,7 +12,17 @@
     .row > * { margin: 6px 0; }
     input[type="password"], input[type="number"], input[type="text"] { padding:6px; min-width:260px; }
     button { padding:8px 12px; }
-    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap:16px; margin-top:12px; }
+   
+
+    /* stack cards vertically */
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* make each card fill the width; allow horizontal scroll for wide tables */
+.card { width: 100%; overflow: auto; }
     .card table { width:100%; border-collapse: collapse; font-size:14px; }
     .card th, .card td { padding:6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
     .muted { color:#666; font-size: 12px; }
