@@ -25,6 +25,8 @@ public class Program
         var storage    = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new StorageOptions();
         var rlOptions  = builder.Configuration.GetSection("RateLimit").Get<RateLimitOptions>() ?? new RateLimitOptions();
 
+        var adminKey = builder.Configuration["AdminKey"]; // required for /admin/db endpoints
+
         builder.Services.AddSingleton(jwtOpts);   // <-- add this
         // DB provider
         builder.Services.AddDbContext<AppDbContext>(opt =>
@@ -118,6 +120,63 @@ app.UseExceptionHandler(errorApp =>
             return File.Exists(p) ? Results.File(p, "text/html")
                                   : Results.Content("<h1>e-Receipt</h1><p>Missing wwwroot/index.html</p>", "text/html");
         });
+// ---- Admin: DB viewers (read-only). Send header: X-Admin-Key: <AdminKey>
+app.MapGet("/admin/db/receipts", async (int? take, AppDbContext db, HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx, adminKey)) return Results.Unauthorized();
+    var limit = take is > 0 and <= 500 ? take.Value : 50;
+    var rows = await db.Receipts.AsNoTracking()
+        .OrderByDescending(r => r.CreatedAt)
+        .Take(limit)
+        .Select(r => new {
+            r.ReceiptId, r.TxnId, r.Msisdn, r.Amount, r.Currency,
+            r.MaxUses, r.Uses, r.ExpiresAt, r.CreatedAt
+        })
+        .ToListAsync();
+    return Results.Ok(rows);
+});
+
+app.MapGet("/admin/db/shortlinks", async (int? take, AppDbContext db, HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx, adminKey)) return Results.Unauthorized();
+    var limit = take is > 0 and <= 500 ? take.Value : 50;
+    var rows = await db.ShortLinks.AsNoTracking()
+        .OrderByDescending(s => s.CreatedAt)
+        .Take(limit)
+        .Select(s => new {
+            s.Code, s.LongUrl, s.Usage, s.UsageMax, s.ExpiresAt, s.CreatedAt
+        })
+        .ToListAsync();
+    return Results.Ok(rows);
+});
+
+app.MapGet("/admin/db/otpcodes", async (int? take, AppDbContext db, HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx, adminKey)) return Results.Unauthorized();
+    var limit = take is > 0 and <= 500 ? take.Value : 50;
+    var rows = await db.OtpCodes.AsNoTracking()
+        .OrderByDescending(o => o.ExpiresAtUtc)
+        .Take(limit)
+        .Select(o => new {
+            o.Token,
+            Code = "***",               // mask the OTP
+            o.ExpiresAtUtc
+        })
+        .ToListAsync();
+    return Results.Ok(rows);
+});
+
+app.MapGet("/admin/db/ratelimits", async (int? take, AppDbContext db, HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx, adminKey)) return Results.Unauthorized();
+    var limit = take is > 0 and <= 500 ? take.Value : 50;
+    var rows = await db.RateLimits.AsNoTracking()
+        .OrderByDescending(r => r.WindowEndUtc)
+        .Take(limit)
+        .Select(r => new { r.Key, r.WindowEndUtc, r.Count })
+        .ToListAsync();
+    return Results.Ok(rows);
+});
 
         // Shortener
         app.MapPost("/api/shorten", async (ShortenRequest req, IShortLinkRepository repo, IRateLimitService rl) =>
@@ -282,6 +341,14 @@ app.UseExceptionHandler(errorApp =>
         for (int i = 0; i < length; i++) chars[i] = alphabet[bytes[i] % alphabet.Length];
         return new string(chars);
     }
+
+    static bool IsAdmin(HttpContext ctx, string? adminKey)
+{
+    if (string.IsNullOrEmpty(adminKey)) return false;
+    var provided = ctx.Request.Headers["X-Admin-Key"].ToString();
+    return !string.IsNullOrEmpty(provided) && provided == adminKey;
+}
+
 
     static string HtmlError(string msg) =>
 $@"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Error</title>
